@@ -1,0 +1,21 @@
+
+# Configuration et secrets
+.env
+.env.*
+!.env.example
+
+# Journaux et erreurs
+/logs/
+*.log
+
+# Dépendances
+/vendor/
+
+# Environnement de développement
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Fichiers temporaires
+*.tmp
+*.bak
