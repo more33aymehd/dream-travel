@@ -1,11 +1,12 @@
-
 <?php
 
 final class Auth
 {
     public static function login(PDO $pdo, string $email, string $password): bool
     {
-		Session::start();
+        Session::start();
+
+        // 1. Vérifier les identifiants
         $sql = "
             SELECT
                 id_employe,
@@ -22,19 +23,22 @@ final class Auth
 
         $employe = $stmt->fetch();
 
-        if (!$employe || !password_verify($password, $employe['mot_de_passe_hash'])) {
+        if (
+            !$employe ||
+            !password_verify($password, $employe['mot_de_passe_hash'])
+        ) {
             return false;
         }
 
+        // 2. Récupérer le profil de l'employé
         $sql = "
             SELECT
                 id_employe,
                 nom,
                 prenom,
                 email,
-                id_agence,
-                roles
-            FROM v_employe_roles
+                id_agence
+            FROM employe
             WHERE id_employe = :id_employe
             LIMIT 1
         ";
@@ -46,19 +50,38 @@ final class Auth
 
         $profil = $stmt->fetch();
 
-        if (!$profil || empty($profil['roles'])) {
+        if (!$profil) {
             return false;
         }
 
-        $roles = array_map(
-            'trim',
-            explode(',', $profil['roles'])
-        );
+        // 3. Récupérer les rôles et leurs portées
+        $sql = "
+            SELECT
+                r.id_role,
+                r.libelle,
+                r.portee
+            FROM employe_role er
+            INNER JOIN role r
+                ON r.id_role = er.id_role
+            WHERE er.id_employe = :id_employe
+        ";
 
-        if (empty($roles)) {
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute([
+            'id_employe' => $profil['id_employe']
+        ]);
+
+        $rolesDetails = $stmt->fetchAll();
+
+        // Un employé sans rôle ne peut pas se connecter
+        if (empty($rolesDetails)) {
             return false;
         }
 
+        $roles = array_column($rolesDetails, 'libelle');
+        $portees = array_column($rolesDetails, 'portee');
+
+        // 4. Créer la session
         Session::regenerate();
 
         $_SESSION['employe'] = [
@@ -67,9 +90,11 @@ final class Auth
             'prenom' => $profil['prenom'],
             'email' => $profil['email'],
             'id_agence' => $profil['id_agence'],
-            'roles' => $roles
+            'roles' => $roles,
+            'portees' => $portees
         ];
 
+        // 5. Enregistrer la dernière connexion
         $update = $pdo->prepare("
             UPDATE employe
             SET derniere_connexion = NOW()
@@ -82,7 +107,6 @@ final class Auth
 
         return true;
     }
-
 
     public static function check(): bool
     {
@@ -115,8 +139,21 @@ final class Auth
 
         $user = self::user();
 
-        // L'employé ne peut accéder qu'à sa propre agence.
-        return $user['id_agence'] === $idAgence;
+        // Les portées PLATEFORME et ENTREPRISE
+        // permettent l'accès à toutes les agences.
+        if (
+            in_array('PLATEFORME', $user['portees'], true) ||
+            in_array('ENTREPRISE', $user['portees'], true)
+        ) {
+            return true;
+        }
+
+        // La portée AGENCE limite l'accès
+        // à l'agence de rattachement de l'employé.
+        return (
+            in_array('AGENCE', $user['portees'], true) &&
+            $user['id_agence'] === $idAgence
+        );
     }
 
     public static function logout(): void
@@ -125,5 +162,4 @@ final class Auth
             Session::destroy();
         }
     }
-
 }
